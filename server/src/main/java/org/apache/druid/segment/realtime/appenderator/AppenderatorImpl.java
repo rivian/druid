@@ -185,6 +185,8 @@ public class AppenderatorImpl implements Appenderator
   private final Map<FireHydrant, Pair<File, SegmentId>> persistedHydrantMetadata =
       Collections.synchronizedMap(new IdentityHashMap<>());
 
+  private int persistThreads = 1;
+
   /**
    * This constructor allows the caller to provide its own SinkQuerySegmentWalker.
    *
@@ -235,6 +237,7 @@ public class AppenderatorImpl implements Appenderator
     }
 
     maxBytesTuningConfig = tuningConfig.getMaxBytesInMemoryOrDefault();
+
     skipBytesInMemoryOverheadCheck = tuningConfig.isSkipBytesInMemoryOverheadCheck();
 
     if (isOpenSegments) {
@@ -243,6 +246,17 @@ public class AppenderatorImpl implements Appenderator
       log.info("Running closed segments appenderator");
     }
 
+    try {
+      String pThreads = System.getProperty("druid.exp.persist.threads");
+      if (pThreads != null) {
+        persistThreads = Integer.parseInt(pThreads);
+      }
+    }
+    catch (Exception e) {
+      log.warn(e, "Error getting persist threads, defaulting");
+    }
+
+    log.info("Number of persist threads [%d]", persistThreads);
   }
 
   @Override
@@ -1140,9 +1154,9 @@ public class AppenderatorImpl implements Appenderator
     if (persistExecutor == null) {
       // use a blocking single threaded executor to throttle the firehose when write to disk is slow
       persistExecutor = MoreExecutors.listeningDecorator(
-          Execs.newBlockingSingleThreaded(
+          Execs.newBlockingThreaded(
               "[" + StringUtils.encodeForFormat(myId) + "]-appenderator-persist",
-              maxPendingPersists
+              persistThreads, maxPendingPersists
           )
       );
     }

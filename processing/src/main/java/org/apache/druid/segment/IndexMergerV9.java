@@ -184,6 +184,7 @@ public class IndexMergerV9 implements IndexMerger
       final @Nullable SegmentWriteOutMediumFactory segmentWriteOutMediumFactory
   ) throws IOException
   {
+    final long startIndexTime = System.currentTimeMillis();
     progress.start();
     progress.progress();
 
@@ -205,6 +206,8 @@ public class IndexMergerV9 implements IndexMerger
           null
       );
     }
+
+    log.debug("Completed merge metadata in [%,d] ms", System.currentTimeMillis() - startIndexTime);
 
     Closer closer = Closer.create();
     try {
@@ -316,6 +319,7 @@ public class IndexMergerV9 implements IndexMerger
     }
     finally {
       closer.close();
+      log.debug("Finished making index files in [%,d] ms", System.currentTimeMillis() - startIndexTime);
     }
   }
 
@@ -984,6 +988,7 @@ public class IndexMergerV9 implements IndexMerger
       int maxColumnsToMerge
   ) throws IOException
   {
+    final long startTime = System.currentTimeMillis();
     FileUtils.deleteDirectory(outDir);
     FileUtils.mkdirp(outDir);
 
@@ -1063,6 +1068,7 @@ public class IndexMergerV9 implements IndexMerger
           }
         }
       }
+      log.info("Finished multi phase merge in [%,d] ms", System.currentTimeMillis() - startTime);
     }
   }
 
