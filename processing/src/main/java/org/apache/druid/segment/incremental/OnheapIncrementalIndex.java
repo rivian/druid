@@ -20,17 +20,25 @@
 package org.apache.druid.segment.incremental;
 
 import com.google.common.base.Supplier;
+import com.google.common.collect.Iterators;
+import com.google.common.collect.Maps;
 import org.apache.druid.data.input.InputRow;
+import org.apache.druid.data.input.MapBasedRow;
+import org.apache.druid.data.input.Row;
 import org.apache.druid.java.util.common.StringUtils;
 import org.apache.druid.java.util.common.io.Closer;
 import org.apache.druid.java.util.common.logger.Logger;
 import org.apache.druid.java.util.common.parsers.ParseException;
 import org.apache.druid.query.aggregation.Aggregator;
 import org.apache.druid.query.aggregation.AggregatorFactory;
+import org.apache.druid.query.aggregation.PostAggregator;
 import org.apache.druid.query.dimension.DimensionSpec;
 import org.apache.druid.segment.ColumnSelectorFactory;
 import org.apache.druid.segment.ColumnValueSelector;
+import org.apache.druid.segment.DimensionHandler;
+import org.apache.druid.segment.DimensionIndexer;
 import org.apache.druid.segment.DimensionSelector;
+import org.apache.druid.segment.StringDimensionIndexer;
 import org.apache.druid.segment.column.ColumnCapabilities;
 import org.apache.druid.utils.JvmUtils;
 
@@ -49,7 +57,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /**
  *
  */
-public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
+public class OnheapIncrementalIndex extends IncrementalIndex
 {
   private static final Logger log = new Logger(OnheapIncrementalIndex.class);
   /**
@@ -74,14 +82,17 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
       boolean concurrentEventAdd,
       boolean sortFacts,
       int maxRowCount,
-      long maxBytesInMemory
+      long maxBytesInMemory,
+      boolean enableInMemoryBitmap
   )
   {
-    super(incrementalIndexSchema, deserializeComplexMetrics, concurrentEventAdd);
+    super(incrementalIndexSchema, deserializeComplexMetrics, concurrentEventAdd, enableInMemoryBitmap);
     this.maxRowCount = maxRowCount;
     this.maxBytesInMemory = maxBytesInMemory == 0 ? Long.MAX_VALUE : maxBytesInMemory;
-    this.facts = incrementalIndexSchema.isRollup() ? new RollupFactsHolder(sortFacts, dimsComparator(), getDimensions())
-                                                   : new PlainFactsHolder(sortFacts, dimsComparator());
+    this.facts = incrementalIndexSchema.isRollup() ? new RollupFactsHolder(sortFacts, dimsComparator(), getDimensions(),
+                                                                           enableInMemoryBitmap)
+                                                   : new PlainFactsHolder(sortFacts, dimsComparator(),
+                                                                          enableInMemoryBitmap);
     maxBytesPerRowForAggregators = getMaxBytesPerRowForAggregators(incrementalIndexSchema);
   }
 
@@ -121,7 +132,7 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
   }
 
   @Override
-  protected Aggregator[] initAggs(
+  protected void initAggs(
       final AggregatorFactory[] metrics,
       final Supplier<InputRow> rowSupplier,
       final boolean deserializeComplexMetrics,
@@ -138,8 +149,6 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
           )
       );
     }
-
-    return new Aggregator[metrics.length];
   }
 
   @Override
@@ -181,6 +190,21 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
       }
       final int prev = facts.putIfAbsent(key, rowIndex);
       if (IncrementalIndexRow.EMPTY_ROW_INDEX == prev) {
+        if (isEnableInMemoryBitmap()) {
+          // After a new row is added, update indexes for all dimensions that enable bitmaps
+          for (int i = 0; i < key.getDims().length; i++) {
+            if (key.getDimensionDescsList().get(i).getCapabilities().hasBitmapIndexes()) {
+              ((StringDimensionIndexer) key.getDimensionDescsList()
+                                           .get(i)
+                                           .getIndexer())
+                  .fillInMemoryBitmapsFromUnsortedEncodedKeyComponent(
+                      (int[]) key.getDims()[i],
+                      rowIndex,
+                      inMemoryBitmapFactory);
+            }
+          }
+        }
+
         numEntries.incrementAndGet();
         long estimatedRowSize = estimateRowSizeInBytes(key, maxBytesPerRowForAggregators);
         sizeInBytes.addAndGet(estimatedRowSize);
@@ -327,16 +351,9 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
     return outOfRowsReason;
   }
 
-  @Override
   protected Aggregator[] getAggsForRow(int rowOffset)
   {
     return concurrentGet(rowOffset);
-  }
-
-  @Override
-  protected Object getAggVal(Aggregator agg, int rowOffset, int aggPosition)
-  {
-    return agg.get();
   }
 
   @Override
@@ -367,6 +384,61 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
   public boolean isNull(int rowOffset, int aggOffset)
   {
     return concurrentGet(rowOffset)[aggOffset].isNull();
+  }
+
+  @Override
+  public Iterable<Row> iterableWithPostAggregations(
+      @Nullable final List<PostAggregator> postAggs,
+      final boolean descending
+  )
+  {
+    final AggregatorFactory[] metrics = getMetricAggs();
+
+    {
+      return () -> {
+        final List<DimensionDesc> dimensions = getDimensions();
+
+        return Iterators.transform(
+            getFacts().iterator(descending),
+            incrementalIndexRow -> {
+              final int rowOffset = incrementalIndexRow.getRowIndex();
+
+              Object[] theDims = incrementalIndexRow.getDims();
+
+              Map<String, Object> theVals = Maps.newLinkedHashMap();
+              for (int i = 0; i < theDims.length; ++i) {
+                Object dim = theDims[i];
+                DimensionDesc dimensionDesc = dimensions.get(i);
+                if (dimensionDesc == null) {
+                  continue;
+                }
+                String dimensionName = dimensionDesc.getName();
+                DimensionHandler handler = dimensionDesc.getHandler();
+                if (dim == null || handler.getLengthOfEncodedKeyComponent(dim) == 0) {
+                  theVals.put(dimensionName, null);
+                  continue;
+                }
+                final DimensionIndexer indexer = dimensionDesc.getIndexer();
+                Object rowVals = indexer.convertUnsortedEncodedKeyComponentToActualList(dim);
+                theVals.put(dimensionName, rowVals);
+              }
+
+              Aggregator[] aggs = getAggsForRow(rowOffset);
+              for (int i = 0; i < aggs.length; ++i) {
+                theVals.put(metrics[i].getName(), aggs[i].get());
+              }
+
+              if (postAggs != null) {
+                for (PostAggregator postAgg : postAggs) {
+                  theVals.put(postAgg.getName(), postAgg.compute(theVals));
+                }
+              }
+
+              return new MapBasedRow(incrementalIndexRow.getTimestamp(), theVals);
+            }
+        );
+      };
+    }
   }
 
   /**
@@ -447,7 +519,8 @@ public class OnheapIncrementalIndex extends IncrementalIndex<Aggregator>
           concurrentEventAdd,
           sortFacts,
           maxRowCount,
-          maxBytesInMemory
+          maxBytesInMemory,
+          enableInMemoryBitmap
       );
     }
   }

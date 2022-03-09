@@ -29,7 +29,7 @@ import javax.annotation.Nullable;
 
 /**
  */
-class SimpleColumnHolder implements ColumnHolder
+public class SimpleColumnHolder implements ColumnHolder
 {
   private final ColumnCapabilities capabilities;
   private final Supplier<? extends BaseColumn> columnSupplier;
@@ -40,7 +40,7 @@ class SimpleColumnHolder implements ColumnHolder
   private static final InvalidComplexColumnTypeValueSelector INVALID_COMPLEX_COLUMN_TYPE_VALUE_SELECTOR
       = new InvalidComplexColumnTypeValueSelector();
 
-  SimpleColumnHolder(
+  public SimpleColumnHolder(
       ColumnCapabilities capabilities,
       @Nullable Supplier<? extends BaseColumn> columnSupplier,
       @Nullable Supplier<BitmapIndex> bitmapIndex,
@@ -58,7 +58,7 @@ class SimpleColumnHolder implements ColumnHolder
     // are prone to such backward incompatible changes.
     if (columnSupplier == null) {
       Preconditions.checkArgument(
-          capabilities.getType() == ValueType.COMPLEX,
+          capabilities.is(ValueType.COMPLEX),
           "Only complex column types can have nullable column suppliers"
       );
     }

@@ -29,10 +29,12 @@ import org.apache.druid.query.BaseQuery;
 import org.apache.druid.query.QueryMetrics;
 import org.apache.druid.query.filter.Filter;
 import org.apache.druid.query.filter.ValueMatcher;
+import org.apache.druid.segment.ColumnSelectorBitmapIndexSelector;
 import org.apache.druid.segment.ColumnSelectorFactory;
 import org.apache.druid.segment.Cursor;
 import org.apache.druid.segment.DimensionDictionarySelector;
 import org.apache.druid.segment.DimensionIndexer;
+import org.apache.druid.segment.FilterAnalysisUtils;
 import org.apache.druid.segment.Metadata;
 import org.apache.druid.segment.StorageAdapter;
 import org.apache.druid.segment.VirtualColumns;
@@ -47,8 +49,10 @@ import org.joda.time.Interval;
 
 import javax.annotation.Nullable;
 import java.util.Iterator;
+import java.util.Objects;
 
 /**
+ *
  */
 public class IncrementalIndexStorageAdapter implements StorageAdapter
 {
@@ -120,9 +124,9 @@ public class IncrementalIndexStorageAdapter implements StorageAdapter
         }
       };
 
-  final IncrementalIndex<?> index;
+  final IncrementalIndex index;
 
-  public IncrementalIndexStorageAdapter(IncrementalIndex<?> index)
+  public IncrementalIndexStorageAdapter(IncrementalIndex index)
   {
     this.index = index;
   }
@@ -240,21 +244,6 @@ public class IncrementalIndexStorageAdapter implements StorageAdapter
   }
 
   @Override
-  public String getColumnTypeName(String column)
-  {
-    final String metricType = index.getMetricType(column);
-    if (metricType != null) {
-      return metricType;
-    }
-    ColumnCapabilities columnCapabilities = getColumnCapabilities(column);
-    if (columnCapabilities != null) {
-      return columnCapabilities.getType().toString();
-    } else {
-      return null;
-    }
-  }
-
-  @Override
   public DateTime getMaxIngestedEventTime()
   {
     return index.getMaxIngestedEventTime();
@@ -285,9 +274,44 @@ public class IncrementalIndexStorageAdapter implements StorageAdapter
       intervals = Lists.reverse(ImmutableList.copyOf(intervals));
     }
 
-    return Sequences
+    if (!index.isEnableInMemoryBitmap()) {
+      return Sequences
         .simple(intervals)
         .map(i -> new IncrementalIndexCursor(virtualColumns, descending, filter, i, actualInterval, gran));
+    } else {
+      final ColumnSelectorBitmapIndexSelector bitmapIndexSelector = makeBitmapIndexSelector(virtualColumns);
+      final FilterAnalysisUtils.FilterAnalysis filterAnalysis = FilterAnalysisUtils.analyzeFilter(
+          filter,
+          bitmapIndexSelector,
+          queryMetrics,
+          index.getFacts().getNumRows()
+      );
+
+      return Sequences.filter(
+          new IncrementalIndexInMemoryBitmapEnabledCursorSequenceBuilder(
+              this,
+              index,
+              actualInterval,
+              virtualColumns,
+              filterAnalysis.getPreFilterBitmap(),
+              getMinTime().getMillis(),
+              getMaxTime().getMillis(),
+              descending,
+              filterAnalysis.getPostFilter(),
+              bitmapIndexSelector
+          ).build(gran),
+          Objects::nonNull
+      );
+    }
+  }
+
+  private ColumnSelectorBitmapIndexSelector makeBitmapIndexSelector(final VirtualColumns virtualColumns)
+  {
+    return new ColumnSelectorBitmapIndexSelector(
+        index.inMemoryBitmapFactory,
+        virtualColumns,
+        index
+    );
   }
 
   @Override

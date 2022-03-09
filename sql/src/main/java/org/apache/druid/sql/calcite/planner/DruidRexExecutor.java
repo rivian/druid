@@ -29,10 +29,12 @@ import org.apache.druid.java.util.common.IAE;
 import org.apache.druid.math.expr.Expr;
 import org.apache.druid.math.expr.ExprEval;
 import org.apache.druid.math.expr.ExprType;
+import org.apache.druid.math.expr.InputBindings;
 import org.apache.druid.math.expr.Parser;
 import org.apache.druid.segment.column.RowSignature;
 import org.apache.druid.sql.calcite.expression.DruidExpression;
 import org.apache.druid.sql.calcite.expression.Expressions;
+import org.apache.druid.sql.calcite.table.RowSignatures;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
@@ -74,10 +76,12 @@ public class DruidRexExecutor implements RexExecutor
         final Expr expr = Parser.parse(druidExpression.getExpression(), plannerContext.getExprMacroTable());
 
         final ExprEval exprResult = expr.eval(
-            name -> {
-              // Sanity check. Bindings should not be used for a constant expression.
-              throw new UnsupportedOperationException();
-            }
+            InputBindings.forFunction(
+                name -> {
+                  // Sanity check. Bindings should not be used for a constant expression.
+                  throw new UnsupportedOperationException();
+                }
+            )
         );
 
         final RexNode literal;
@@ -119,7 +123,7 @@ public class DruidRexExecutor implements RexExecutor
           if (exprResult.isNumericNull()) {
             literal = rexBuilder.makeNullLiteral(constExp.getType());
           } else {
-            if (exprResult.type() == ExprType.LONG) {
+            if (exprResult.type().is(ExprType.LONG)) {
               bigDecimal = BigDecimal.valueOf(exprResult.asLong());
 
             } else {
@@ -142,6 +146,9 @@ public class DruidRexExecutor implements RexExecutor
         } else if (sqlTypeName == SqlTypeName.ARRAY) {
           assert exprResult.isArray();
           literal = rexBuilder.makeLiteral(Arrays.asList(exprResult.asArray()), constExp.getType(), true);
+        } else if (sqlTypeName == SqlTypeName.OTHER && constExp.getType() instanceof RowSignatures.ComplexSqlType) {
+          // complex constant is not reducible, so just leave it as an expression
+          literal = constExp;
         } else {
           literal = rexBuilder.makeLiteral(exprResult.value(), constExp.getType(), true);
         }

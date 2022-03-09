@@ -118,6 +118,7 @@ public class RealtimePlumber implements Plumber
   );
   private final QuerySegmentWalker texasRanger;
   private final Cache cache;
+  private final boolean enableInMemoryBitmap;
 
   private volatile long nextFlush = 0;
   private volatile boolean shuttingDown = false;
@@ -149,7 +150,8 @@ public class RealtimePlumber implements Plumber
       Cache cache,
       CacheConfig cacheConfig,
       CachePopulatorStats cachePopulatorStats,
-      ObjectMapper objectMapper
+      ObjectMapper objectMapper,
+      boolean enableInMemoryBitmap
   )
   {
     this.schema = schema;
@@ -175,6 +177,7 @@ public class RealtimePlumber implements Plumber
         cacheConfig,
         cachePopulatorStats
     );
+    this.enableInMemoryBitmap = enableInMemoryBitmap;
 
     log.info("Creating plumber using rejectionPolicy[%s]", getRejectionPolicy());
   }
@@ -202,7 +205,13 @@ public class RealtimePlumber implements Plumber
   @Override
   public Object startJob()
   {
-    computeBaseDir(schema).mkdirs();
+    try {
+      FileUtils.mkdirp(computeBaseDir(schema));
+    }
+    catch (IOException e) {
+      throw new RuntimeException(e);
+    }
+
     initializeExecutors();
     handoffNotifier.start();
     Object retVal = bootstrapSinksFromDisk();
@@ -264,7 +273,8 @@ public class RealtimePlumber implements Plumber
           config.getAppendableIndexSpec(),
           config.getMaxRowsInMemory(),
           config.getMaxBytesInMemoryOrDefault(),
-          config.getDedupColumn()
+          config.getDedupColumn(),
+          enableInMemoryBitmap
       );
       addSink(retVal);
 
@@ -730,7 +740,8 @@ public class RealtimePlumber implements Plumber
           config.getMaxRowsInMemory(),
           config.getMaxBytesInMemoryOrDefault(),
           config.getDedupColumn(),
-          hydrants
+          hydrants,
+          enableInMemoryBitmap
       );
       addSink(currSink);
     }

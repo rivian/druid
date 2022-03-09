@@ -87,6 +87,9 @@ public class IncrementalIndexReadBenchmark
   @Param({"onheap", "offheap"})
   private String indexType;
 
+  @Param({"true", "false"})
+  private boolean enableInMemoryBitmap;
+
   private static final Logger log = new Logger(IncrementalIndexReadBenchmark.class);
   private static final int RNG_SEED = 9999;
 
@@ -95,7 +98,7 @@ public class IncrementalIndexReadBenchmark
   }
 
   private AppendableIndexSpec appendableIndexSpec;
-  private IncrementalIndex<?> incIndex;
+  private IncrementalIndex incIndex;
   private GeneratorSchemaInfo schemaInfo;
 
   @Setup
@@ -130,7 +133,7 @@ public class IncrementalIndexReadBenchmark
     }
   }
 
-  private IncrementalIndex<?> makeIncIndex()
+  private IncrementalIndex makeIncIndex()
   {
     return appendableIndexSpec.builder()
         .setIndexSchema(
@@ -140,6 +143,7 @@ public class IncrementalIndexReadBenchmark
                 .build()
         )
         .setMaxRowCount(rowsPerSegment)
+        .setEnableInMemoryBitmap(enableInMemoryBitmap)
         .build();
   }
 

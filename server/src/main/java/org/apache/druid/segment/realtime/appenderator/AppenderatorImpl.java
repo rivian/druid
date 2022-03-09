@@ -260,7 +260,6 @@ public class AppenderatorImpl implements Appenderator
   @Override
   public Object startJob()
   {
-    tuningConfig.getBasePersistDirectory().mkdirs();
     lockBasePersistDirectory();
     final Object retVal = bootstrapSinksFromDisk();
     initializeExecutors();
@@ -496,7 +495,9 @@ public class AppenderatorImpl implements Appenderator
           tuningConfig.getAppendableIndexSpec(),
           tuningConfig.getMaxRowsInMemory(),
           maxBytesTuningConfig,
-          null
+          null,
+          // Batch ingestions don't need query capability
+          false
       );
       bytesCurrentlyInMemory.addAndGet(calculateSinkMemoryInUsed(retVal));
 
@@ -1099,6 +1100,8 @@ public class AppenderatorImpl implements Appenderator
   {
     if (basePersistDirLock == null) {
       try {
+        FileUtils.mkdirp(tuningConfig.getBasePersistDirectory());
+
         basePersistDirLockChannel = FileChannel.open(
             computeLockFile().toPath(),
             StandardOpenOption.CREATE,
@@ -1297,7 +1300,9 @@ public class AppenderatorImpl implements Appenderator
             tuningConfig.getMaxRowsInMemory(),
             maxBytesTuningConfig,
             null,
-            hydrants
+            hydrants,
+            // Batch ingestions don't need query capability
+            false
         );
         rowsSoFar += currSink.getNumRows();
         sinks.put(identifier, currSink);
@@ -1476,7 +1481,7 @@ public class AppenderatorImpl implements Appenderator
   private File createPersistDirIfNeeded(SegmentIdWithShardSpec identifier) throws IOException
   {
     final File persistDir = computePersistDir(identifier);
-    org.apache.commons.io.FileUtils.forceMkdir(persistDir);
+    FileUtils.mkdirp(persistDir);
 
     objectMapper.writeValue(computeIdentifierFile(identifier), identifier);
 

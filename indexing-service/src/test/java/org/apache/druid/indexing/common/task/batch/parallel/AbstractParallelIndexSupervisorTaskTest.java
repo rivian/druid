@@ -177,7 +177,7 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
           null,
           null,
           null,
-          null,
+          5,
           null,
           null
       );
@@ -245,7 +245,8 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
             ImmutableList.of(new StorageLocationConfig(temporaryFolder.newFolder(), null, null)),
             false,
             false,
-            TaskConfig.BATCH_PROCESSING_MODE_DEFAULT.name()
+            TaskConfig.BATCH_PROCESSING_MODE_DEFAULT.name(),
+            false
         ),
         null
     );
@@ -312,7 +313,7 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
     return coordinatorClient;
   }
 
-  private static class TaskContainer
+  protected static class TaskContainer
   {
     private final Task task;
     @MonotonicNonNull
@@ -323,6 +324,11 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
     private TaskContainer(Task task)
     {
       this.task = task;
+    }
+
+    public Task getTask()
+    {
+      return task;
     }
 
     private void setStatusFuture(Future<TaskStatus> statusFuture)
@@ -419,6 +425,11 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
       catch (ExecutionException | TimeoutException e) {
         throw new RuntimeException(e);
       }
+    }
+
+    private TaskContainer getTaskContainer(String taskId)
+    {
+      return tasks.get(taskId);
     }
 
     private Future<TaskStatus> runTask(Task task)
@@ -531,6 +542,11 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
       return taskRunner.run(injectIfNeeded(task));
     }
 
+    public TaskContainer getTaskContainer(String taskId)
+    {
+      return taskRunner.getTaskContainer(taskId);
+    }
+
     public TaskStatus runAndWait(Task task)
     {
       return taskRunner.runAndWait(injectIfNeeded(task));
@@ -613,7 +629,8 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
         null,
         false,
         false,
-        TaskConfig.BATCH_PROCESSING_MODE_DEFAULT.name()
+        TaskConfig.BATCH_PROCESSING_MODE_DEFAULT.name(),
+        false
     );
 
     objectMapper.setInjectableValues(
@@ -661,7 +678,8 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
             null,
             false,
             false,
-            TaskConfig.BATCH_PROCESSING_MODE_DEFAULT.name()
+            TaskConfig.BATCH_PROCESSING_MODE_DEFAULT.name(),
+            false
         ),
         new DruidNode("druid/middlemanager", "localhost", false, 8091, null, true, false),
         actionClient,
@@ -762,7 +780,7 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
       );
       final File unzippedDir = new File(partitionDir, StringUtils.format("unzipped_%s", location.getSubTaskId()));
       try {
-        org.apache.commons.io.FileUtils.forceMkdir(unzippedDir);
+        FileUtils.mkdirp(unzippedDir);
         CompressionUtils.unzip(fetchedFile, unzippedDir);
       }
       finally {

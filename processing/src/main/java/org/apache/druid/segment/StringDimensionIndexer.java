@@ -19,34 +19,29 @@
 
 package org.apache.druid.segment;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicate;
 import com.google.common.base.Predicates;
-import com.google.common.collect.Lists;
 import com.google.common.primitives.Ints;
+import com.google.common.util.concurrent.Striped;
 import it.unimi.dsi.fastutil.ints.IntArrays;
-import it.unimi.dsi.fastutil.ints.IntIterator;
-import it.unimi.dsi.fastutil.objects.Object2IntMap;
-import it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
-import it.unimi.dsi.fastutil.objects.Object2IntRBTreeMap;
-import it.unimi.dsi.fastutil.objects.Object2IntSortedMap;
 import org.apache.druid.collections.bitmap.BitmapFactory;
+import org.apache.druid.collections.bitmap.ImmutableBitmap;
 import org.apache.druid.collections.bitmap.MutableBitmap;
+import org.apache.druid.collections.bitmap.RoaringBitmapFactory;
 import org.apache.druid.common.config.NullHandling;
 import org.apache.druid.data.input.impl.DimensionSchema.MultiValueHandling;
 import org.apache.druid.java.util.common.ISE;
 import org.apache.druid.java.util.common.guava.Comparators;
-import org.apache.druid.query.dimension.DefaultDimensionSpec;
 import org.apache.druid.query.dimension.DimensionSpec;
 import org.apache.druid.query.extraction.ExtractionFn;
 import org.apache.druid.query.filter.ValueMatcher;
 import org.apache.druid.query.monomorphicprocessing.RuntimeShapeInspector;
 import org.apache.druid.segment.column.ColumnCapabilities;
 import org.apache.druid.segment.column.ColumnCapabilitiesImpl;
-import org.apache.druid.segment.column.ValueType;
+import org.apache.druid.segment.column.ColumnType;
 import org.apache.druid.segment.data.ArrayBasedIndexedInts;
-import org.apache.druid.segment.data.CloseableIndexed;
 import org.apache.druid.segment.data.IndexedInts;
-import org.apache.druid.segment.data.IndexedIterable;
 import org.apache.druid.segment.filter.BooleanValueMatcher;
 import org.apache.druid.segment.incremental.IncrementalIndex;
 import org.apache.druid.segment.incremental.IncrementalIndexRow;
@@ -57,12 +52,17 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.BitSet;
-import java.util.Iterator;
 import java.util.List;
+import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], String>
+public class StringDimensionIndexer extends DictionaryEncodedColumnIndexer<int[], String>
 {
+  @VisibleForTesting
+  public static final String BITMAP_INDEX_DISABLED_IN_SCHEMA_ERR_MSG = "This column disabled bitmap indexes in schema";
+
+  @VisibleForTesting
+  public static final String IN_MEMORY_BITMAP_INDEX_DISABLED_ERR_MSG = "This column disabled in-memory bitmap indexes";
 
   @Nullable
   private static String emptyToNullIfNeeded(@Nullable Object o)
@@ -70,186 +70,68 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
     return o != null ? NullHandling.emptyToNullIfNeeded(o.toString()) : null;
   }
 
-  private static final int ABSENT_VALUE_ID = -1;
+  /**
+   * Number of small locks to replace a single giant lock to reduce lock contention
+   */
+  private static final int IN_MEMORY_BITMAP_STRIPED_LOCK_NUM_STRIPES = 64;
 
-  private static class DimensionDictionary
-  {
-    @Nullable
-    private String minValue = null;
-    @Nullable
-    private String maxValue = null;
-    private volatile int idForNull = ABSENT_VALUE_ID;
-
-    private final Object2IntMap<String> valueToId = new Object2IntOpenHashMap<>();
-
-    private final List<String> idToValue = new ArrayList<>();
-    private final ReentrantReadWriteLock lock;
-
-    public DimensionDictionary()
-    {
-      this.lock = new ReentrantReadWriteLock();
-      valueToId.defaultReturnValue(ABSENT_VALUE_ID);
-    }
-
-    public int getId(@Nullable String value)
-    {
-      lock.readLock().lock();
-      try {
-        if (value == null) {
-          return idForNull;
-        }
-        return valueToId.getInt(value);
-      }
-      finally {
-        lock.readLock().unlock();
-      }
-    }
-
-    @Nullable
-    public String getValue(int id)
-    {
-      lock.readLock().lock();
-      try {
-        if (id == idForNull) {
-          return null;
-        }
-        return idToValue.get(id);
-      }
-      finally {
-        lock.readLock().unlock();
-      }
-    }
-
-    public int size()
-    {
-      lock.readLock().lock();
-      try {
-        // using idToValue rather than valueToId because the valueToId doesn't account null value, if it is present.
-        return idToValue.size();
-      }
-      finally {
-        lock.readLock().unlock();
-      }
-    }
-
-    public int add(@Nullable String originalValue)
-    {
-      lock.writeLock().lock();
-      try {
-        if (originalValue == null) {
-          if (idForNull == ABSENT_VALUE_ID) {
-            idForNull = idToValue.size();
-            idToValue.add(null);
-          }
-          return idForNull;
-        }
-        int prev = valueToId.getInt(originalValue);
-        if (prev >= 0) {
-          return prev;
-        }
-        final int index = idToValue.size();
-        valueToId.put(originalValue, index);
-        idToValue.add(originalValue);
-        minValue = minValue == null || minValue.compareTo(originalValue) > 0 ? originalValue : minValue;
-        maxValue = maxValue == null || maxValue.compareTo(originalValue) < 0 ? originalValue : maxValue;
-        return index;
-      }
-      finally {
-        lock.writeLock().unlock();
-      }
-    }
-
-    public String getMinValue()
-    {
-      lock.readLock().lock();
-      try {
-        return minValue;
-      }
-      finally {
-        lock.readLock().unlock();
-      }
-    }
-
-    public String getMaxValue()
-    {
-      lock.readLock().lock();
-      try {
-        return maxValue;
-      }
-      finally {
-        lock.readLock().unlock();
-      }
-    }
-
-    public SortedDimensionDictionary sort()
-    {
-      lock.readLock().lock();
-      try {
-        return new SortedDimensionDictionary(idToValue, idToValue.size());
-      }
-      finally {
-        lock.readLock().unlock();
-      }
-    }
-  }
-
-  private static class SortedDimensionDictionary
-  {
-    private final List<String> sortedVals;
-    private final int[] idToIndex;
-    private final int[] indexToId;
-
-    public SortedDimensionDictionary(List<String> idToValue, int length)
-    {
-      Object2IntSortedMap<String> sortedMap = new Object2IntRBTreeMap<>(Comparators.naturalNullsFirst());
-      for (int id = 0; id < length; id++) {
-        String value = idToValue.get(id);
-        sortedMap.put(value, id);
-      }
-      this.sortedVals = Lists.newArrayList(sortedMap.keySet());
-      this.idToIndex = new int[length];
-      this.indexToId = new int[length];
-      int index = 0;
-      for (IntIterator iterator = sortedMap.values().iterator(); iterator.hasNext(); ) {
-        int id = iterator.nextInt();
-        idToIndex[id] = index;
-        indexToId[index] = id;
-        index++;
-      }
-    }
-
-    public int getUnsortedIdFromSortedId(int index)
-    {
-      return indexToId[index];
-    }
-
-    public int getSortedIdFromUnsortedId(int id)
-    {
-      return idToIndex[id];
-    }
-
-    public String getValueFromSortedId(int index)
-    {
-      return sortedVals.get(index);
-    }
-  }
-
-  private final DimensionDictionary dimLookup;
   private final MultiValueHandling multiValueHandling;
   private final boolean hasBitmapIndexes;
   private final boolean hasSpatialIndexes;
   private volatile boolean hasMultipleValues = false;
-  private volatile boolean isSparse = false;
 
+  /**
+   * Whether in-memory bitmap is enabled for this dimension
+   */
+  private final boolean enableInMemoryBitmap;
+  /**
+   * The kind of bitmap to create for in-memory bitmap
+   */
   @Nullable
-  private SortedDimensionDictionary sortedLookup;
+  private final BitmapFactory inMemoryBitmapFactory;
+  /**
+   * A list of in-memory bitmaps for each distinct value of this dimension
+   */
+  @Nullable
+  private final List<MutableBitmap> inMemoryBitmaps;
+  /**
+   * Read-write lock for {@link #inMemoryBitmaps}. Synchronization is needed because the list can be read or mutated in
+   * {@link #fillInMemoryBitmapsFromUnsortedEncodedKeyComponent} by one thread and read in {@link #getBitmap} by another
+   * thread concurrently. Since both read and write access patterns exist, use a read-write lock.
+   */
+  @Nullable
+  private final ReentrantReadWriteLock inMemoryBitmapsLock;
+  /**
+   * Exclusive lock for individual element in {@link #inMemoryBitmaps}. Synchronization is needed because each mutable
+   * bitmap in the list can be mutated in {@link #fillInMemoryBitmapsFromUnsortedEncodedKeyComponent} by one thread and
+   * mutated in {@link #getBitmap} by another thread concurrently. Since only write access pattern exists, use an
+   * exclusive lock. Use {@link Striped}: multiple small locks instead of a giant lock to reduce lock contention: the
+   * cardinality of distinct values of this dimension can be high so the size of in-memory bitmap list can be large so
+   * we want finer granular lock control.
+   */
+  @Nullable
+  private final Striped<Lock> inMemoryBitmapStripedLock;
 
-  public StringDimensionIndexer(MultiValueHandling multiValueHandling, boolean hasBitmapIndexes, boolean hasSpatialIndexes)
+  public StringDimensionIndexer(MultiValueHandling multiValueHandling, boolean hasBitmapIndexes,
+                                boolean hasSpatialIndexes, boolean enableInMemoryBitmap)
   {
-    this.dimLookup = new DimensionDictionary();
     this.multiValueHandling = multiValueHandling == null ? MultiValueHandling.ofDefault() : multiValueHandling;
     this.hasBitmapIndexes = hasBitmapIndexes;
     this.hasSpatialIndexes = hasSpatialIndexes;
+
+    if (enableInMemoryBitmap) {
+      this.enableInMemoryBitmap = enableInMemoryBitmap;
+      this.inMemoryBitmaps = new ArrayList<>();
+      this.inMemoryBitmapFactory = new RoaringBitmapFactory();
+      this.inMemoryBitmapsLock = new ReentrantReadWriteLock();
+      this.inMemoryBitmapStripedLock = Striped.lock(IN_MEMORY_BITMAP_STRIPED_LOCK_NUM_STRIPES);
+    } else {
+      this.enableInMemoryBitmap = false;
+      this.inMemoryBitmaps = null;
+      this.inMemoryBitmapFactory = null;
+      this.inMemoryBitmapsLock = null;
+      this.inMemoryBitmapStripedLock = null;
+    }
   }
 
   @Override
@@ -260,7 +142,7 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
 
     if (dimValues == null) {
       final int nullId = dimLookup.getId(null);
-      encodedDimensionValues = nullId == ABSENT_VALUE_ID ? new int[]{dimLookup.add(null)} : new int[]{nullId};
+      encodedDimensionValues = nullId == DimensionDictionary.ABSENT_VALUE_ID ? new int[]{dimLookup.add(null)} : new int[]{nullId};
     } else if (dimValues instanceof List) {
       List<Object> dimValuesList = (List<Object>) dimValues;
       if (dimValuesList.isEmpty()) {
@@ -309,12 +191,6 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
   }
 
   @Override
-  public void setSparseIndexed()
-  {
-    isSparse = true;
-  }
-
-  @Override
   public long estimateEncodedKeyComponentSize(int[] key)
   {
     // string length is being accounted for each time they are referenced, based on dimension handler interface,
@@ -336,91 +212,6 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
     return estimatedSize;
   }
 
-  public Integer getSortedEncodedValueFromUnsorted(Integer unsortedIntermediateValue)
-  {
-    return sortedLookup().getSortedIdFromUnsortedId(unsortedIntermediateValue);
-  }
-
-  @Override
-  public Integer getUnsortedEncodedValueFromSorted(Integer sortedIntermediateValue)
-  {
-    return sortedLookup().getUnsortedIdFromSortedId(sortedIntermediateValue);
-  }
-
-  @Override
-  public CloseableIndexed<String> getSortedIndexedValues()
-  {
-    return new CloseableIndexed<String>()
-    {
-
-      @Override
-      public int size()
-      {
-        return getCardinality();
-      }
-
-      @Override
-      public String get(int index)
-      {
-        return getActualValue(index, true);
-      }
-
-      @Override
-      public int indexOf(String value)
-      {
-        int id = getEncodedValue(value, false);
-        return id < 0 ? ABSENT_VALUE_ID : getSortedEncodedValueFromUnsorted(id);
-      }
-
-      @Override
-      public Iterator<String> iterator()
-      {
-        return IndexedIterable.create(this).iterator();
-      }
-
-      @Override
-      public void inspectRuntimeShape(RuntimeShapeInspector inspector)
-      {
-        // nothing to inspect
-      }
-
-      @Override
-      public void close()
-      {
-        // nothing to close
-      }
-    };
-  }
-
-  @Override
-  public String getMinValue()
-  {
-    return dimLookup.getMinValue();
-  }
-
-  @Override
-  public String getMaxValue()
-  {
-    return dimLookup.getMaxValue();
-  }
-
-  @Override
-  public int getCardinality()
-  {
-    return dimLookup.size();
-  }
-
-  /**
-   * returns true if all values are encoded in {@link #dimLookup}
-   */
-  private boolean dictionaryEncodesAllValues()
-  {
-    // name lookup is possible in advance if we explicitly process a value for every row, or if we've encountered an
-    // actual null value and it is present in our dictionary. otherwise the dictionary will be missing ids for implicit
-    // null values
-    return !isSparse || dimLookup.idForNull != ABSENT_VALUE_ID;
-  }
-
   @Override
   public int compareUnsortedEncodedKeyComponents(int[] lhs, int[] rhs)
   {
@@ -432,7 +223,7 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
       // if the values don't have the same length, check if we're comparing [] and [null], which are equivalent
       if (lhsLen + rhsLen == 1) {
         int[] longerVal = rhsLen > lhsLen ? rhs : lhs;
-        if (longerVal[0] == dimLookup.idForNull) {
+        if (longerVal[0] == dimLookup.getIdForNull()) {
           return 0;
         } else {
           //noinspection ArrayEquality -- longerVal is explicitly set to only lhs or rhs
@@ -480,7 +271,7 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
   @Override
   public ColumnCapabilities getColumnCapabilities()
   {
-    ColumnCapabilitiesImpl capabilites = new ColumnCapabilitiesImpl().setType(ValueType.STRING)
+    ColumnCapabilitiesImpl capabilites = new ColumnCapabilitiesImpl().setType(ColumnType.STRING)
                                                                      .setHasBitmapIndexes(hasBitmapIndexes)
                                                                      .setHasSpatialIndexes(hasSpatialIndexes)
                                                                      .setDictionaryValuesUnique(true)
@@ -506,7 +297,7 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
       capabilites.setDictionaryEncoded(true);
     }
 
-    if (isSparse || dimLookup.idForNull != ABSENT_VALUE_ID) {
+    if (isSparse || dimLookup.getIdForNull() != DimensionDictionary.ABSENT_VALUE_ID) {
       capabilites.setHasNulls(true);
     }
     return capabilites;
@@ -724,7 +515,7 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
         } else {
           // Can happen if a value was added to our dimLookup after this selector was created. Act like it
           // doesn't exist.
-          return ABSENT_VALUE_ID;
+          return DimensionDictionary.ABSENT_VALUE_ID;
         }
       }
 
@@ -762,15 +553,6 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
     return new IndexerDimensionSelector();
   }
 
-  @Override
-  public ColumnValueSelector<?> makeColumnValueSelector(
-      IncrementalIndexRowHolder currEntry,
-      IncrementalIndex.DimensionDesc desc
-  )
-  {
-    return makeDimensionSelector(DefaultDimensionSpec.of(desc.getName()), currEntry, desc);
-  }
-
 
   @Nullable
   @Override
@@ -789,90 +571,6 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
       }
       return Arrays.asList(rowArray);
     }
-  }
-
-  @Override
-  public ColumnValueSelector convertUnsortedValuesToSorted(ColumnValueSelector selectorWithUnsortedValues)
-  {
-    DimensionSelector dimSelectorWithUnsortedValues = (DimensionSelector) selectorWithUnsortedValues;
-    class SortedDimensionSelector implements DimensionSelector, IndexedInts
-    {
-      @Override
-      public int size()
-      {
-        return dimSelectorWithUnsortedValues.getRow().size();
-      }
-
-      @Override
-      public int get(int index)
-      {
-        return sortedLookup().getSortedIdFromUnsortedId(dimSelectorWithUnsortedValues.getRow().get(index));
-      }
-
-      @Override
-      public IndexedInts getRow()
-      {
-        return this;
-      }
-
-      @Override
-      public ValueMatcher makeValueMatcher(@Nullable String value)
-      {
-        throw new UnsupportedOperationException();
-      }
-
-      @Override
-      public ValueMatcher makeValueMatcher(Predicate<String> predicate)
-      {
-        throw new UnsupportedOperationException();
-      }
-
-      @Override
-      public int getValueCardinality()
-      {
-        return dimSelectorWithUnsortedValues.getValueCardinality();
-      }
-
-      @Nullable
-      @Override
-      public String lookupName(int id)
-      {
-        throw new UnsupportedOperationException();
-      }
-
-      @Override
-      public boolean nameLookupPossibleInAdvance()
-      {
-        throw new UnsupportedOperationException();
-      }
-
-      @Nullable
-      @Override
-      public IdLookup idLookup()
-      {
-        throw new UnsupportedOperationException();
-      }
-
-      @Override
-      public void inspectRuntimeShape(RuntimeShapeInspector inspector)
-      {
-        inspector.visit("dimSelectorWithUnsortedValues", dimSelectorWithUnsortedValues);
-      }
-
-      @Nullable
-      @Override
-      public Object getObject()
-      {
-        return dimSelectorWithUnsortedValues.getObject();
-      }
-
-      @Override
-      public Class classOfObject()
-      {
-        return dimSelectorWithUnsortedValues.classOfObject();
-      }
-    }
-    return new SortedDimensionSelector();
   }
 
   @Override
@@ -895,30 +593,166 @@ public class StringDimensionIndexer implements DimensionIndexer<Integer, int[], 
     }
   }
 
-  private SortedDimensionDictionary sortedLookup()
+  /**
+   * Update in-memory bitmaps to associate the distinct values in `key` with the `rowNum` containing them.
+   * Similar to {@link DimensionIndexer#fillBitmapsFromUnsortedEncodedKeyComponent} which is used during incremental
+   * index segment finalization but this function is used during real-time writes to incremental index before segment
+   * finalization happens therefore it contains extra locking.
+   *
+   * Thread safety: this method is called from
+   * {@link org.apache.druid.segment.incremental.OnheapIncrementalIndex#addToFacts} which is an implementation of
+   * {@link IncrementalIndex#addToFacts} whose documentation indicates its thread safety. As a result, this method is
+   * made thread safe as well.
+   *
+   * @param key dimension value array from a Row key
+   * @param rowNum current row number
+   * @param factory bitmap factory
+   */
+  public void fillInMemoryBitmapsFromUnsortedEncodedKeyComponent(
+      int[] key,
+      int rowNum,
+      BitmapFactory factory
+  )
   {
-    return sortedLookup == null ? sortedLookup = dimLookup.sort() : sortedLookup;
-  }
+    if (!hasBitmapIndexes) {
+      throw new UnsupportedOperationException(BITMAP_INDEX_DISABLED_IN_SCHEMA_ERR_MSG);
+    } else if (!enableInMemoryBitmap) {
+      throw new UnsupportedOperationException(IN_MEMORY_BITMAP_INDEX_DISABLED_ERR_MSG);
+    }
 
-  @Nullable
-  private String getActualValue(int intermediateValue, boolean idSorted)
-  {
-    if (idSorted) {
-      return sortedLookup().getValueFromSortedId(intermediateValue);
-    } else {
-      return dimLookup.getValue(intermediateValue);
+    int maxIndex = Arrays.stream(key)
+                         .max()
+                         .getAsInt();
+    List<MutableBitmap> bitmapsToUpdate = new ArrayList<>();
 
+    boolean newValueEncountered = false;
+    inMemoryBitmapsLock.readLock().lock();
+    try {
+      // Check if we need to expand bitmap list to insert values not seen before
+      if (inMemoryBitmaps.size() <= maxIndex) {
+        newValueEncountered = true;
+      } else {
+        // Get bitmaps to update
+        for (int dimValIdx : key) {
+          bitmapsToUpdate.add(inMemoryBitmaps.get(dimValIdx));
+        }
+      }
+    }
+    finally {
+      inMemoryBitmapsLock.readLock().unlock();
+    }
+
+    if (newValueEncountered) {
+      // Acquire a write lock while expanding the list
+      inMemoryBitmapsLock.writeLock().lock();
+      try {
+        while (inMemoryBitmaps.size() <= maxIndex) {
+          inMemoryBitmaps.add(factory.makeEmptyMutableBitmap());
+        }
+        // Get bitmaps to update
+        for (int dimValIdx : key) {
+          bitmapsToUpdate.add(inMemoryBitmaps.get(dimValIdx));
+        }
+      }
+      finally {
+        inMemoryBitmapsLock.writeLock().unlock();
+      }
+    }
+
+    // Update indivudal bitmaps
+    for (int i = 0; i < key.length; i++) {
+      int dimValIdx = key[i];
+      MutableBitmap b = bitmapsToUpdate.get(i);
+
+      // Acquire the exclusive lock before changing the mutable bitmap
+      Lock lock = inMemoryBitmapStripedLock.getAt(lockIndex(dimValIdx));
+      lock.lock();
+      try {
+        b.add(rowNum);
+      }
+      finally {
+        lock.unlock();
+      }
     }
   }
 
-  private int getEncodedValue(String fullValue, boolean idSorted)
+  public String getValue(int index)
   {
-    int unsortedId = dimLookup.getId(fullValue);
+    return dimLookup.getValue(index);
+  }
 
-    if (idSorted) {
-      return sortedLookup().getSortedIdFromUnsortedId(unsortedId);
-    } else {
-      return unsortedId;
+  public boolean hasNulls()
+  {
+    return dimLookup.getIdForNull() != DimensionDictionary.ABSENT_VALUE_ID;
+  }
+
+  public int getIndex(@Nullable String value)
+  {
+    return dimLookup.getId(value);
+  }
+
+  /**
+   * Get an immutable version of the bitmap of the given `idx`
+   *
+   * @param idx The index of the bitmap to get
+   * @return An immutable version of the bitmap
+   */
+  public ImmutableBitmap getBitmap(int idx)
+  {
+    if (!hasBitmapIndexes) {
+      throw new UnsupportedOperationException(BITMAP_INDEX_DISABLED_IN_SCHEMA_ERR_MSG);
+    } else if (!enableInMemoryBitmap) {
+      throw new UnsupportedOperationException(IN_MEMORY_BITMAP_INDEX_DISABLED_ERR_MSG);
     }
+
+    // Step 1: use a read lock to prevent inMemoryBitmaps from being adding or removing elements while we get element
+    // from it
+    inMemoryBitmapsLock.readLock().lock();
+    MutableBitmap mutableBitmapToClone;
+    try {
+      mutableBitmapToClone =
+          (idx < 0 || idx >= inMemoryBitmaps.size()) ? null : inMemoryBitmaps.get(idx);
+    }
+    finally {
+      inMemoryBitmapsLock.readLock().unlock();
+    }
+
+    // Step 2 clone the mutable bitmap to an immutable bitmap
+    // Note that it's possible more writes have happened so the mutable bitmap to clone have been mutated in
+    // {@link #fillInMemoryBitmapsFromUnsortedEncodedKeyComponent} between step 1 and step 2, but it's OK because it
+    // just means we end up with more records to filter on.
+    if (mutableBitmapToClone == null) {
+      return inMemoryBitmapFactory.makeEmptyImmutableBitmap();
+    } else {
+      // Acquire the exclusive lock of the mutable bitmap before trying converting it to an immutable bitmap: if the
+      // underlying mutable bitmap has an internal buffer, a flush will be triggered during clone to get an immutable
+      // copy which is a write operation, use an exclusive lock here
+      Lock lock = inMemoryBitmapStripedLock.getAt(lockIndex(idx));
+      lock.lock();
+      try {
+        return inMemoryBitmapFactory.makeImmutableBitmap(mutableBitmapToClone);
+      }
+      finally {
+        lock.unlock();
+      }
+    }
+  }
+
+  private static int lockIndex(final int position)
+  {
+    return smear(position) % IN_MEMORY_BITMAP_STRIPED_LOCK_NUM_STRIPES;
+  }
+
+  /**
+   * see https://github.com/google/guava/blob/master/guava/src/com/google/common/util/concurrent/Striped.java#L536-L548
+   *
+   * @param hashCode
+   *
+   * @return smeared hashCode
+   */
+  private static int smear(int hashCode)
+  {
+    hashCode ^= (hashCode >>> 20) ^ (hashCode >>> 12);
+    return hashCode ^ (hashCode >>> 7) ^ (hashCode >>> 4);
   }
 }

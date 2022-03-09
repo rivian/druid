@@ -22,13 +22,17 @@ package org.apache.druid.indexing.common.config;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
+import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.EnumUtils;
+import org.apache.druid.java.util.common.ISE;
 import org.apache.druid.java.util.common.logger.Logger;
 import org.apache.druid.segment.loading.StorageLocationConfig;
 import org.joda.time.Period;
 
 import javax.annotation.Nullable;
 import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
@@ -42,10 +46,33 @@ import java.util.List;
 public class TaskConfig
 {
   private static final Logger log = new Logger(TaskConfig.class);
+  private static final String HADOOP_LIB_VERSIONS = "hadoop.indexer.libs.version";
+  public static final List<String> DEFAULT_DEFAULT_HADOOP_COORDINATES;
 
-  public static final List<String> DEFAULT_DEFAULT_HADOOP_COORDINATES = ImmutableList.of(
-      "org.apache.hadoop:hadoop-client:2.8.5"
-  );
+  static {
+    try {
+      DEFAULT_DEFAULT_HADOOP_COORDINATES =
+          ImmutableList.copyOf(Lists.newArrayList(IOUtils.toString(
+              TaskConfig.class.getResourceAsStream("/"
+                                                   + HADOOP_LIB_VERSIONS),
+              StandardCharsets.UTF_8
+          ).split(",")));
+
+    }
+    catch (Exception e) {
+      throw new ISE(e, "Unable to read file %s from classpath ", HADOOP_LIB_VERSIONS);
+    }
+  }
+
+  // This enum controls processing mode of batch ingestion "segment creation" phase (i.e. appenderator logic)
+  public enum BatchProcessingMode
+  {
+    OPEN_SEGMENTS, /* mmap segments, legacy code */
+    CLOSED_SEGMENTS, /* Do not mmap segments but keep most other legacy code */
+    CLOSED_SEGMENTS_SINKS /* Most aggressive memory optimization, do not mmap segments and eliminate sinks, etc. */
+  }
+
+  public static final BatchProcessingMode BATCH_PROCESSING_MODE_DEFAULT = BatchProcessingMode.CLOSED_SEGMENTS;
 
   // This enum controls processing mode of batch ingestion "segment creation" phase (i.e. appenderator logic)
   public enum BatchProcessingMode
@@ -96,6 +123,9 @@ public class TaskConfig
   @JsonProperty
   private final BatchProcessingMode batchProcessingMode;
 
+  @JsonProperty
+  private final boolean enableInMemoryBitmap;
+
   @JsonCreator
   public TaskConfig(
       @JsonProperty("baseDir") String baseDir,
@@ -109,7 +139,8 @@ public class TaskConfig
       @JsonProperty("shuffleDataLocations") List<StorageLocationConfig> shuffleDataLocations,
       @JsonProperty("ignoreTimestampSpecForDruidInputSource") boolean ignoreTimestampSpecForDruidInputSource,
       @JsonProperty("batchMemoryMappedIndex") boolean batchMemoryMappedIndex, // deprecated, only set to true to fall back to older behavior
-      @JsonProperty("batchProcessingMode") String batchProcessingMode
+      @JsonProperty("batchProcessingMode") String batchProcessingMode,
+      @JsonProperty("enableInMemoryBitmap") boolean enableInMemoryBitmap
   )
   {
     this.baseDir = baseDir == null ? System.getProperty("java.io.tmpdir") : baseDir;
@@ -152,6 +183,7 @@ public class TaskConfig
       );
     }
     log.info("Batch processing mode:[%s]", this.batchProcessingMode);
+    this.enableInMemoryBitmap = enableInMemoryBitmap;
   }
 
   @JsonProperty
@@ -250,6 +282,11 @@ public class TaskConfig
     return batchMemoryMappedIndex;
   }
 
+  @JsonProperty
+  public boolean isEnableInMemoryBitmap()
+  {
+    return enableInMemoryBitmap;
+  }
 
   private String defaultDir(@Nullable String configParameter, final String defaultVal)
   {

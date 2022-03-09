@@ -198,7 +198,6 @@ A sample task is shown below:
 |id|The task ID. If this is not explicitly specified, Druid generates the task ID using task type, data source name, interval, and date-time stamp. |no|
 |spec|The ingestion spec including the data schema, IOConfig, and TuningConfig. See below for more details. |yes|
 |context|Context containing various task configuration parameters. See below for more details.|no|
-|awaitSegmentAvailabilityTimeoutMillis|Long|Milliseconds to wait for the newly indexed segments to become available for query after ingestion completes. If `<= 0`, no wait will occur. If `> 0`, the task will wait for the Coordinator to indicate that the new segments are available for querying. If the timeout expires, the task will exit as successful, but the segments were not confirmed to have become available for query. Note for compaction tasks: you should not set this to a non-zero value because it is not supported by the compaction task type at this time.|no (default = 0)|
 
 ### `dataSchema`
 
@@ -1219,9 +1218,7 @@ in `druid.ingestion.hdfs.allowedProtocols`. See [HDFS input source security conf
 
 The HTTP input source is to support reading files directly from remote sites via HTTP.
 
-> **NOTE:** Ingestion tasks run under the operating system account that runs the Druid processes, for example the Indexer, Middle Manager, and Peon. This means any user who can submit an ingestion task can specify an `HTTPInputSource` at any location where the Druid process has permissions. For example, using `HTTPInputSource`, a console user has access to internal network locations where the they would be denied access otherwise.
-
-> **WARNING:** `HTTPInputSource` is not limited to the HTTP or HTTPS protocols. It uses the Java `URI` class that supports HTTP, HTTPS, FTP, file, and jar protocols by default. This means you should never run Druid under the `root` account, because a user can use the file protocol to access any files on the local disk.
+> **NOTE:** Ingestion tasks run under the operating system account that runs the Druid processes, for example the Indexer, Middle Manager, and Peon. This means any user who can submit an ingestion task can specify an `HTTPInputSource` at any location where the Druid process has permissions. For example, using `HTTPInputSource`, a console user has access to internal network locations where they would be denied access otherwise.
 
 For more information about security best practices, see [Security overview](../operations/security-overview.md#best-practices).
 
