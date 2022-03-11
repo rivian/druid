@@ -74,16 +74,6 @@ public class TaskConfig
 
   public static final BatchProcessingMode BATCH_PROCESSING_MODE_DEFAULT = BatchProcessingMode.CLOSED_SEGMENTS;
 
-  // This enum controls processing mode of batch ingestion "segment creation" phase (i.e. appenderator logic)
-  public enum BatchProcessingMode
-  {
-    OPEN_SEGMENTS, /* mmap segments, legacy code */
-    CLOSED_SEGMENTS, /* Do not mmap segments but keep most other legacy code */
-    CLOSED_SEGMENTS_SINKS /* Most aggressive memory optimization, do not mmap segments and eliminate sinks, etc. */
-  }
-
-  public static final BatchProcessingMode BATCH_PROCESSING_MODE_DEFAULT = BatchProcessingMode.CLOSED_SEGMENTS;
-
   private static final Period DEFAULT_DIRECTORY_LOCK_TIMEOUT = new Period("PT10M");
   private static final Period DEFAULT_GRACEFUL_SHUTDOWN_TIMEOUT = new Period("PT5M");
 
