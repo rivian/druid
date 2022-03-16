@@ -620,6 +620,10 @@ public class StringDimensionIndexer extends DictionaryEncodedColumnIndexer<int[]
       throw new UnsupportedOperationException(IN_MEMORY_BITMAP_INDEX_DISABLED_ERR_MSG);
     }
 
+    if ((key == null) || (key.length == 0)) {
+      return;
+    }
+
     int maxIndex = Arrays.stream(key)
                          .max()
                          .getAsInt();
