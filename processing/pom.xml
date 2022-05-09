@@ -28,7 +28,7 @@
     <parent>
         <groupId>org.apache.druid</groupId>
         <artifactId>druid</artifactId>
-        <version>0.22.2-riv-1</version>
+        <version>0.22.2-riv-2</version>
     </parent>
 
     <dependencies>
