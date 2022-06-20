@@ -275,7 +275,8 @@ public class CompactionTask extends AbstractBatchIndexTask
           parallelIndexTuningConfig.getMaxParseExceptions(),
           parallelIndexTuningConfig.getMaxSavedParseExceptions(),
           parallelIndexTuningConfig.getMaxColumnsToMerge(),
-          parallelIndexTuningConfig.getAwaitSegmentAvailabilityTimeoutMillis()
+          parallelIndexTuningConfig.getAwaitSegmentAvailabilityTimeoutMillis(),
+          parallelIndexTuningConfig.getNumPersistThreads()
       );
     } else if (tuningConfig instanceof IndexTuningConfig) {
       final IndexTuningConfig indexTuningConfig = (IndexTuningConfig) tuningConfig;
@@ -309,7 +310,8 @@ public class CompactionTask extends AbstractBatchIndexTask
           indexTuningConfig.getMaxParseExceptions(),
           indexTuningConfig.getMaxSavedParseExceptions(),
           indexTuningConfig.getMaxColumnsToMerge(),
-          indexTuningConfig.getAwaitSegmentAvailabilityTimeoutMillis()
+          indexTuningConfig.getAwaitSegmentAvailabilityTimeoutMillis(),
+          indexTuningConfig.getNumPersistThreads()
       );
     } else {
       throw new ISE(
@@ -1180,7 +1182,8 @@ public class CompactionTask extends AbstractBatchIndexTask
           null,
           null,
           null,
-          0L
+          0L,
+          null
       );
     }
 
@@ -1215,7 +1218,8 @@ public class CompactionTask extends AbstractBatchIndexTask
         @JsonProperty("maxParseExceptions") @Nullable Integer maxParseExceptions,
         @JsonProperty("maxSavedParseExceptions") @Nullable Integer maxSavedParseExceptions,
         @JsonProperty("maxColumnsToMerge") @Nullable Integer maxColumnsToMerge,
-        @JsonProperty("awaitSegmentAvailabilityTimeoutMillis") @Nullable Long awaitSegmentAvailabilityTimeoutMillis
+        @JsonProperty("awaitSegmentAvailabilityTimeoutMillis") @Nullable Long awaitSegmentAvailabilityTimeoutMillis,
+        @JsonProperty("numPersistThreads") @Nullable Integer numPersistThreads
     )
     {
       super(
@@ -1248,7 +1252,8 @@ public class CompactionTask extends AbstractBatchIndexTask
           maxParseExceptions,
           maxSavedParseExceptions,
           maxColumnsToMerge,
-          awaitSegmentAvailabilityTimeoutMillis
+          awaitSegmentAvailabilityTimeoutMillis,
+          numPersistThreads
       );
 
       Preconditions.checkArgument(
@@ -1290,7 +1295,8 @@ public class CompactionTask extends AbstractBatchIndexTask
           getMaxParseExceptions(),
           getMaxSavedParseExceptions(),
           getMaxColumnsToMerge(),
-          getAwaitSegmentAvailabilityTimeoutMillis()
+          getAwaitSegmentAvailabilityTimeoutMillis(),
+          getNumPersistThreads()
       );
     }
   }

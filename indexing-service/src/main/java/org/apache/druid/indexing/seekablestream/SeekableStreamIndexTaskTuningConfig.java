@@ -37,6 +37,7 @@ public abstract class SeekableStreamIndexTaskTuningConfig implements Appenderato
 {
   private static final boolean DEFAULT_RESET_OFFSET_AUTOMATICALLY = false;
   private static final boolean DEFAULT_SKIP_SEQUENCE_NUMBER_AVAILABILITY_CHECK = false;
+  private static final int DEFAULT_NUM_PERSIST_THREADS = 1;
 
   private final AppendableIndexSpec appendableIndexSpec;
   private final int maxRowsInMemory;
@@ -61,6 +62,8 @@ public abstract class SeekableStreamIndexTaskTuningConfig implements Appenderato
   private final int maxParseExceptions;
   private final int maxSavedParseExceptions;
 
+  private final int numPersistThreads;
+
   public SeekableStreamIndexTaskTuningConfig(
       @Nullable AppendableIndexSpec appendableIndexSpec,
       @Nullable Integer maxRowsInMemory,
@@ -81,7 +84,8 @@ public abstract class SeekableStreamIndexTaskTuningConfig implements Appenderato
       @Nullable Period intermediateHandoffPeriod,
       @Nullable Boolean logParseExceptions,
       @Nullable Integer maxParseExceptions,
-      @Nullable Integer maxSavedParseExceptions
+      @Nullable Integer maxSavedParseExceptions,
+      @Nullable Integer numPersistThreads
   )
   {
     // Cannot be a static because default basePersistDirectory is unique per-instance
@@ -134,6 +138,8 @@ public abstract class SeekableStreamIndexTaskTuningConfig implements Appenderato
     this.logParseExceptions = logParseExceptions == null
                               ? TuningConfig.DEFAULT_LOG_PARSE_EXCEPTIONS
                               : logParseExceptions;
+    this.numPersistThreads = numPersistThreads == null ?
+                                DEFAULT_NUM_PERSIST_THREADS : Math.max(numPersistThreads, DEFAULT_NUM_PERSIST_THREADS);
   }
 
   @Override
@@ -279,6 +285,13 @@ public abstract class SeekableStreamIndexTaskTuningConfig implements Appenderato
   }
 
   @Override
+  @JsonProperty
+  public int getNumPersistThreads()
+  {
+    return numPersistThreads;
+  }
+
+  @Override
   public abstract SeekableStreamIndexTaskTuningConfig withBasePersistDirectory(File dir);
 
   @Override
@@ -303,6 +316,7 @@ public abstract class SeekableStreamIndexTaskTuningConfig implements Appenderato
            logParseExceptions == that.logParseExceptions &&
            maxParseExceptions == that.maxParseExceptions &&
            maxSavedParseExceptions == that.maxSavedParseExceptions &&
+           numPersistThreads == that.numPersistThreads &&
            Objects.equals(partitionsSpec, that.partitionsSpec) &&
            Objects.equals(intermediatePersistPeriod, that.intermediatePersistPeriod) &&
            Objects.equals(basePersistDirectory, that.basePersistDirectory) &&
@@ -334,7 +348,8 @@ public abstract class SeekableStreamIndexTaskTuningConfig implements Appenderato
         skipSequenceNumberAvailabilityCheck,
         logParseExceptions,
         maxParseExceptions,
-        maxSavedParseExceptions
+        maxSavedParseExceptions,
+        numPersistThreads
     );
   }
 
