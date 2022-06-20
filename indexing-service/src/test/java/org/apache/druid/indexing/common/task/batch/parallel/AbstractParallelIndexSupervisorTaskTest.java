@@ -194,6 +194,7 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
           5,
           null,
           null,
+          null,
           null
       );
 
@@ -302,6 +303,7 @@ public class AbstractParallelIndexSupervisorTaskTest extends IngestionTestBase
         null,
         null,
         5,
+        null,
         null,
         null,
         null
