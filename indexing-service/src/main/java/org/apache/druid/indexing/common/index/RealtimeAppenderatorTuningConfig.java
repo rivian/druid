@@ -47,6 +47,7 @@ public class RealtimeAppenderatorTuningConfig implements AppenderatorConfig
   private static final Boolean DEFAULT_REPORT_PARSE_EXCEPTIONS = Boolean.FALSE;
   private static final long DEFAULT_HANDOFF_CONDITION_TIMEOUT = 0;
   private static final long DEFAULT_ALERT_TIMEOUT = 0;
+  private static final int DEFAULT_NUM_PERSIST_THREADS = 1;
 
   private static File createNewBasePersistDirectory()
   {
@@ -74,6 +75,8 @@ public class RealtimeAppenderatorTuningConfig implements AppenderatorConfig
   private final int maxParseExceptions;
   private final int maxSavedParseExceptions;
 
+  private final int numPersistThreads;
+
   @JsonCreator
   public RealtimeAppenderatorTuningConfig(
       @JsonProperty("appendableIndexSpec") @Nullable AppendableIndexSpec appendableIndexSpec,
@@ -94,7 +97,8 @@ public class RealtimeAppenderatorTuningConfig implements AppenderatorConfig
       @JsonProperty("segmentWriteOutMediumFactory") @Nullable SegmentWriteOutMediumFactory segmentWriteOutMediumFactory,
       @JsonProperty("logParseExceptions") @Nullable Boolean logParseExceptions,
       @JsonProperty("maxParseExceptions") @Nullable Integer maxParseExceptions,
-      @JsonProperty("maxSavedParseExceptions") @Nullable Integer maxSavedParseExceptions
+      @JsonProperty("maxSavedParseExceptions") @Nullable Integer maxSavedParseExceptions,
+      @JsonProperty("numPersistThreads") @Nullable Integer numPersistThreads
   )
   {
     this.appendableIndexSpec = appendableIndexSpec == null ? DEFAULT_APPENDABLE_INDEX : appendableIndexSpec;
@@ -140,6 +144,8 @@ public class RealtimeAppenderatorTuningConfig implements AppenderatorConfig
     this.logParseExceptions = logParseExceptions == null
                               ? TuningConfig.DEFAULT_LOG_PARSE_EXCEPTIONS
                               : logParseExceptions;
+    this.numPersistThreads = numPersistThreads == null ?
+            DEFAULT_NUM_PERSIST_THREADS : Math.max(numPersistThreads, DEFAULT_NUM_PERSIST_THREADS);
   }
 
   @Override
@@ -278,6 +284,13 @@ public class RealtimeAppenderatorTuningConfig implements AppenderatorConfig
   }
 
   @Override
+  @JsonProperty
+  public int getNumPersistThreads()
+  {
+    return numPersistThreads;
+  }
+
+  @Override
   public RealtimeAppenderatorTuningConfig withBasePersistDirectory(File dir)
   {
     return new RealtimeAppenderatorTuningConfig(
@@ -299,7 +312,8 @@ public class RealtimeAppenderatorTuningConfig implements AppenderatorConfig
         segmentWriteOutMediumFactory,
         logParseExceptions,
         maxParseExceptions,
-        maxSavedParseExceptions
+        maxSavedParseExceptions,
+        numPersistThreads
     );
   }
 }
