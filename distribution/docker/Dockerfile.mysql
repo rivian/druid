@@ -36,6 +36,6 @@ WORKDIR /
 ARG DD_JAVA_AGENT_URL=https://repo1.maven.org/maven2/com/datadoghq/dd-java-agent/1.34.0/dd-java-agent-1.34.0.jar
 ARG DD_JAVA_AGENT_JAR=dd-java-agent.jar
 
-RUN wget --no-check-certificate -q ${DD_JAVA_AGENT_URL} -O ${DD_JAVA_AGENT_JAR}
+RUN cd /tmp && wget --no-check-certificate -q ${DD_JAVA_AGENT_URL} -O ${DD_JAVA_AGENT_JAR}
 
 WORKDIR /opt/druid
